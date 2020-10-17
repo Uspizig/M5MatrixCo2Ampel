@@ -1,62 +1,102 @@
-#define RXD2 16
-#define TXD2 17
-#define INTERVAL 5000
-#define IDX_mhz19   26
+/*
+  Reading CO2, humidity and temperature from the SCD30
+  This example prints the current CO2 level, relative humidity, and temperature in C. and sends a red/yellow/green Signal on the M5 Matrix
+  
+  Hardware Connections:
+  Attach RedBoard to computer using a USB cable.
+  Connect SCD30 to RedBoard using Qwiic cable.
+  Open Serial Monitor at 115200 baud.
+*/
+#define M5ATOM
+#define SCD30_CONNECTED
+#define SCAN_REPETITION_TIME 90000  // Wie oft gemessen wird ier alle 90000ms = 90 sec = 1.5min
+//Minimale Zeit zwischen zwei Messungen 2 sec 
 
-long previousMillis = 0;
+#include <Wire.h>
+#include "SparkFun_SCD30_Arduino_Library.h" //Click here to get the library: http://librarymanager/All#SparkFun_SCD30
+SCD30 airSensor;
 
+#ifdef M5ATOM
+  #include <FastLED.h>
+   // Define the array of leds
+  #define NUM_LEDS 25 
+  #define DATA_PIN 27
+  FASTLED_USING_NAMESPACE
+  #define MAX_POWER_MILLIAMPS 500
+  CRGB leds[NUM_LEDS];
 
-void setup() {
+  #define sda 26 ///* I2C Pin Definition */
+  #define scl 32 ///* I2C Pin Definition */
+#endif
+
+long lastMsg = 0;
+float scd30_CO2 = 0;
+float scd30_temp = 0;
+float scd30_feuchte = 0;
+
+void setup()
+{
   Serial.begin(115200);
-  Serial2.begin(9600, SERIAL_8N1, RXD2, TXD2); 
-}
-
-void loop() {
-  unsigned long currentMillis = millis();
-  if (currentMillis - previousMillis < INTERVAL)
-   return;
- 
-  previousMillis = currentMillis;
-  Serial.print("Requesting CO2 concentration...");
-  int ppm = readCO2();
-  Serial.println("  PPM = " + String(ppm));
-
-}
-
-int readCO2() {
-  //  From original code https://github.com/jehy/arduino-esp8266-mh-z19-serial
-  byte cmd[9] = {0xFF, 0x01, 0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x79};
-  // command to ask for data
-  byte response[9]; // for answer
-
-  Serial2.write(cmd, 9); //request PPM CO2
-
-  // The serial stream can get out of sync. The response starts with 0xff, try to resync.
-  while (Serial2.available() > 0 && (unsigned char)Serial2.peek() != 0xFF) {
-    Serial2.read();
-  }
-  memset(response, 0, 9);
-  Serial2.readBytes(response, 9);
-
-  if (response[1] != 0x86)
+  Serial.println("SCD30 Example");
+  Wire.begin(sda, scl);
+  LEDInit();
+  if (airSensor.begin() == false)
   {
-    Serial.println("Invalid response from co2 sensor!");
-    return -1;
+    Serial.println("Air sensor not detected. Please check if your Sensor is connected...");
+    Serial.println("Co² sensor nicht erkannt. Bitte Verkabelung prüfen...");
+    while (1)
+      ;
   }
+  //The SCD30 has data ready every two seconds
+}
 
-  byte crc = 0;
-  for (int i = 1; i < 8; i++) {
-    crc += response[i];
+void loop()
+{ 
+  long now = millis();
+        if (now - lastMsg > SCAN_REPETITION_TIME) {
+          Serial.print("Time: ");Serial.println(lastMsg);
+          lastMsg = now;
+          #ifdef SCD30_CONNECTED
+            scd30Messung(); 
+          #endif  
+          #ifdef M5ATOM
+            LEDUpdate();          
+          #endif
+        }
+}
+
+void scd30Messung(void){
+  if (airSensor.dataAvailable())
+  {
+    Serial.print("co2(ppm):"); Serial.print(airSensor.getCO2());
+    Serial.print(" Temperatur(C):"); Serial.print(airSensor.getTemperature(), 1);
+    Serial.print(" Feuchte(%):"); Serial.println(airSensor.getHumidity(), 1);
+    scd30_CO2 = (int)airSensor.getCO2();
+    scd30_temp = (int)airSensor.getTemperature();
+    scd30_feuchte = (int)airSensor.getHumidity();
   }
-  crc = 255 - crc + 1;
-
-  if (response[8] == crc) {
-    int responseHigh = (int) response[2];
-    int responseLow = (int) response[3];
-    int ppm = (256 * responseHigh) + responseLow;
-    return ppm;
-  } else {
-    Serial.println("CRC error!");
-    return -1;
+  else{
+    Serial.println("Warten auf neue Daten");
   }
 }
+
+
+#ifdef M5ATOM
+  /* M5 ATOM LED MATRIX ansteuern */
+  void LEDUpdate(void){
+    for(int i = 0; i < NUM_LEDS; i++) {
+      if (scd30_CO2 < 700)      leds[i] = CRGB::Green;
+      else if (scd30_CO2 < 1300) leds[i] = CRGB::Yellow;
+      else                      leds[i] = CRGB::Red;
+      FastLED.show(); 
+    }
+  }
+  void LEDInit(void){
+    LEDS.addLeds<WS2812,DATA_PIN,GRB>(leds,NUM_LEDS);
+    LEDS.setBrightness(54);
+    for(int i = 0; i < NUM_LEDS; i++) {
+      leds[i] = CRGB::Blue;
+    }
+    FastLED.show(); 
+  }
+#endif
